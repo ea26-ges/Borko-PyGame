@@ -6,11 +6,12 @@ from poker import evaluate_poker_hand
 
 # Joker class - special cards with abilities
 class Joker:
-    def __init__(self, name, description, effect_type, effect_value):
+    def __init__(self, name, description, effect_type, effect_value=None):
         self.name = name
         self.description = description
-        self.effect_type = effect_type  # 'multiplier_bonus', 'chip_bonus', etc.
+        self.effect_type = effect_type  # Custom effect type for complex logic
         self.effect_value = effect_value
+        self.state = {}  # For stateful jokers
         self.image = None  # Initialize to None, load lazily
 
     def load_image(self):
@@ -32,17 +33,89 @@ class Joker:
             self.load_image()
         screen.blit(self.image, (x, y))
 
-    def apply_effect(self, base_score, multiplier):
-        if self.effect_type == 'multiplier_bonus':
-            return base_score, multiplier + self.effect_value
-        elif self.effect_type == 'chip_bonus':
-            return base_score + self.effect_value, multiplier
-        return base_score, multiplier
+    def apply_effect(self, game, chips, multiplier):
+        if self.effect_type == 'add_chips':
+            return chips + self.effect_value, multiplier
+        elif self.effect_type == 'add_mult':
+            return chips, multiplier + self.effect_value
+        elif self.effect_type == 'multiply_chips':
+            return chips * self.effect_value, multiplier
+        elif self.effect_type == 'multiply_mult':
+            return chips, multiplier * self.effect_value
+        elif self.effect_type == 'suit_bonus':
+            # effect_value is (suit, mult_bonus)
+            suit, bonus = self.effect_value
+            count = sum(1 for card in game.selected_cards if card.suit == suit)
+            return chips, multiplier + count * bonus
+        elif self.effect_type == 'banner':
+            return chips + game.discards_left * 30, multiplier
+        elif self.effect_type == 'fibonacci':
+            fib_ranks = {1, 2, 3, 5, 8}  # Ace=1
+            count = sum(1 for card in game.selected_cards if card.value in fib_ranks)
+            return chips, multiplier + count * 8
+        elif self.effect_type == 'revolution':
+            if game.hand:
+                lowest = min(card.value for card in game.hand)
+                return chips, multiplier + lowest * 2
+            return chips, multiplier
+        elif self.effect_type == 'popcorn':
+            bonus = self.state.get('mult_bonus', 20)
+            bonus = max(0, bonus - 4)
+            self.state['mult_bonus'] = bonus
+            return chips, multiplier + bonus
+        elif self.effect_type == 'even_steven':
+            even_ranks = {2, 4, 6, 8, 10}
+            count = sum(1 for card in game.selected_cards if card.value in even_ranks)
+            return chips, multiplier + count * 4
+        elif self.effect_type == 'odd_todd':
+            odd_ranks = {1, 3, 5, 7, 9}  # A=1,9,7,5,3
+            count = sum(1 for card in game.selected_cards if card.value in odd_ranks)
+            return chips + count * 31, multiplier
+        elif self.effect_type == 'extrovert':
+            return chips, multiplier + len(game.jokers) * 3
+        elif self.effect_type == 'hack':
+            hack_ranks = {2, 3, 4, 5}
+            count = sum(1 for card in game.selected_cards if card.value in hack_ranks)
+            if count > 0:
+                multiplier *= (1 + count)  # Retrigger means multiply score by (1 + count)?
+            return chips, multiplier
+        elif self.effect_type == 'glitch':
+            import random
+            bonus = random.randint(0, 23)
+            return chips, multiplier + bonus
+        elif self.effect_type == 'loyalty_card':
+            if game.hands_played % 6 == 0 and game.hands_played > 0:
+                multiplier *= 2
+            return chips, multiplier
+        elif self.effect_type == 'bus_ride':
+            # Check if no face cards (J,Q,K=11,12,13) in selected_cards
+            has_face = any(card.value >= 11 for card in game.selected_cards)
+            if not has_face:
+                self.state['mult_bonus'] = self.state.get('mult_bonus', 0) + 1
+            else:
+                self.state['mult_bonus'] = 0
+            return chips, multiplier + self.state.get('mult_bonus', 0)
+        return chips, multiplier
 
 # Available jokers pool
 JOKER_POOL = [
-    Joker("The Chud", "+5 Multiplier", "multiplier_bonus", 5),
-    # Add more jokers here as we create them
+    Joker("The Chud", "+5 Multiplier", "add_mult", 5),
+    Joker("Chip Master", "+50 Chips", "add_chips", 50),
+    Joker("Greedy Joker", "Played Diamonds give +3 Mult", "suit_bonus", ("diamonds", 3)),
+    Joker("Lusty Joker", "Played Hearts give +3 Mult", "suit_bonus", ("hearts", 3)),
+    Joker("Wrathful Joker", "Played Spades give +3 Mult", "suit_bonus", ("spades", 3)),
+    Joker("Gluttonous Joker", "Played Clubs give +3 Mult", "suit_bonus", ("clubs", 3)),
+    Joker("Banner", "+30 Chips per remaining discard", "banner"),
+    Joker("Fibonacci", "A,2,3,5,8 give +8 Mult each", "fibonacci"),
+    Joker("Revolution", "+2x lowest card in hand to Mult", "revolution"),
+    Joker("Popcorn", "+20 Mult, -4 per turn", "popcorn"),
+    Joker("Even Steven", "Even ranks give +4 Mult", "even_steven"),
+    Joker("Odd Todd", "Odd ranks give +31 Chips", "odd_todd"),
+    Joker("Extrovert", "+3 Mult per Joker", "extrovert"),
+    Joker("Hack", "Retrigger 2,3,4,5", "hack"),
+    Joker("Gl1tch", "+0-23 Mult random", "glitch"),
+    Joker("Loyalty Card", "x2 Mult every 6 hands", "loyalty_card"),
+    Joker("Bus Ride", "+1 Mult per hand without face cards", "bus_ride"),
 ]
 
 # Game class - main game logic using composition
@@ -60,6 +133,7 @@ class Game:
         self.discards_left = 4
         self.turns_left = 4  # 4 turns per round
         self.current_round = 1
+        self.hands_played = 0  # Track total hands played for jokers
         self.ui_manager = UIManager()  # Composition: Game has a UIManager
         self.play_button = Button(1200 // 2 - 150 - 10, 800 - 100, 150, 50, "Play Hand")  # SCREEN_WIDTH // 2 - BUTTON_WIDTH - 10
         self.discard_button = Button(1200 // 2 + 10, 800 - 100, 150, 50, "Discard & Draw", (255, 0, 0))  # RED
@@ -83,16 +157,24 @@ class Game:
     def play_hand(self):
         if len(self.selected) >= 1 and len(self.selected) <= 5 and self.turns_left > 0:
             selected_cards = [self.hand[i] for i in self.selected]
+            self.selected_cards = selected_cards  # Store for joker effects
             hand_type, base_score, base_chips = evaluate_poker_hand(selected_cards)
             if hand_type:
                 # Apply joker effects
+                chips = base_chips
                 multiplier = 1
                 for joker in self.jokers:
-                    base_score, multiplier = joker.apply_effect(base_score, multiplier)
+                    chips, multiplier = joker.apply_effect(self, chips, multiplier)
 
-                score = base_score * multiplier
+                score = chips * multiplier
                 self.current_score += score
+                self.hands_played += 1
                 print(f"Played {hand_type}: +{score} chips (Total: {self.current_score})")
+
+                # If player reached target score, go to joker selection/next round immediately.
+                if self.current_score >= self.target_score:
+                    self.show_joker_selection()
+                    return True
 
             # Remove played cards and draw new ones to maintain hand size
             self.hand = [card for i, card in enumerate(self.hand) if i not in self.selected]
@@ -117,6 +199,11 @@ class Game:
             print(f"Discarded {len(self.selected)} cards. {self.discards_left} discards left.")
 
     def check_round_end(self):
+        if self.current_score >= self.target_score:
+            print(f"Round {self.current_round} completed! Score: {self.current_score}/{self.target_score}")
+            self.show_joker_selection()
+            return
+
         if self.turns_left == 0:
             if self.current_score >= self.target_score:
                 print(f"Round {self.current_round} completed! Score: {self.current_score}/{self.target_score}")
@@ -126,6 +213,9 @@ class Game:
                 # Could add game over logic here
 
     def show_joker_selection(self):
+        if len(self.jokers) >= 5:
+            self.next_round()
+            return
         # Randomly select 4 jokers from the pool
         available_jokers = [joker for joker in JOKER_POOL if joker not in self.jokers]
         if len(available_jokers) >= 4:
@@ -152,7 +242,9 @@ class Game:
         self.draw_initial_hand()
         print(f"Starting Round {self.current_round} - Target: {self.target_score}")
 
-    def handle_click(self, pos):
+    def handle_click(self, event):
+        pos = event.pos
+
         # Handle joker selection first if active
         if self.selecting_joker and self.joker_options:
             joker_index = self.ui_manager.get_joker_click_position(pos, self.joker_options)
@@ -167,6 +259,16 @@ class Game:
                 self.selected.remove(card_index)
             elif len(self.selected) < 5:
                 self.selected.add(card_index)
+            return
+
+        # Handle owned joker clicks
+        joker_index = self.ui_manager.get_owned_joker_click_position(pos, self.jokers)
+        if joker_index is not None:
+            if event.button == 1:  # Left click: show description
+                print(f"{self.jokers[joker_index].name}: {self.jokers[joker_index].description}")
+            elif event.button == 3:  # Right click: discard
+                discarded = self.jokers.pop(joker_index)
+                print(f"Discarded {discarded.name}")
             return
 
         # Handle button clicks

@@ -33,6 +33,7 @@ class UIManager:
     def __init__(self):
         self.font = pygame.font.Font(None, 36)
         self.small_font = pygame.font.Font(None, 24)
+        self.tiny_font = pygame.font.Font(None, 18)
 
     def draw_text(self, screen, text, x, y, font=None, color=BLACK):
         if font is None:
@@ -88,8 +89,8 @@ class UIManager:
             joker.draw(screen, x, joker_y)
 
             # Draw description below each joker
-            desc_surface = self.small_font.render(joker.description, True, WHITE)
-            desc_rect = desc_surface.get_rect(center=(x + 50, joker_y + 140 + 20))  # CARD_WIDTH//2, CARD_HEIGHT + 20
+            desc_surface = self.tiny_font.render(joker.description, True, WHITE)
+            desc_rect = desc_surface.get_rect(center=(x + 50, joker_y + 140 + 30))  # CARD_WIDTH//2, CARD_HEIGHT + 30
             screen.blit(desc_surface, desc_rect)
 
         # Draw selection prompt
@@ -126,4 +127,16 @@ class UIManager:
             joker_rect = pygame.Rect(x, joker_y, 100, 140)  # CARD_WIDTH, CARD_HEIGHT
             if joker_rect.collidepoint(pos):
                 return i
+        return None
+
+    def get_owned_joker_click_position(self, pos, jokers):
+        if jokers:
+            joker_y = 50
+            total_joker_width = len(jokers) * 100 + (len(jokers) - 1) * 10  # CARD_WIDTH = 100
+            joker_start_x = (SCREEN_WIDTH - total_joker_width) // 2
+            for i, joker in enumerate(jokers):
+                x = joker_start_x + i * (100 + 10)  # CARD_WIDTH + 10
+                joker_rect = pygame.Rect(x, joker_y, 100, 140)  # CARD_WIDTH, CARD_HEIGHT
+                if joker_rect.collidepoint(pos):
+                    return i
         return None
